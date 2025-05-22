@@ -28,7 +28,7 @@ target_link_libraries(cute_gemm
         PRIVATE
         CUDA::cudart
         CUDA::cuda_driver
-        #CUDA::cublas
+        CUDA::cublas
         #CUDA::cufft
         #CUDA::curand
 )

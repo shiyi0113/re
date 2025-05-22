@@ -18,6 +18,9 @@ void cpu_compare(const T &x, const T &y, float threshold = 1.E-1);
 template <typename T>
 void gpu_compare(const T *x, const T *y, int n, float threshold = 1.E-1);
 
+template <typename LayoutType>
+bool save_latex_to_file(const LayoutType &layout, const std::string &filename);
+
 void printf_fail(const char *fmt, ...) {
   int red = 31;
   int def = 39;
