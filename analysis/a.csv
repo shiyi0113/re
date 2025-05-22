@@ -1,4 +1,0 @@
-==PROF== Connected to process 6679 (/home/shiyi/cuda-advance/re/build/cute_gemm)
-==PROF== Disconnected from process 6679
-"ID","Process ID","Process Name","Host Name","Kernel Name","Context","Stream","Block Size","Grid Size","Device","CC","Section Name","Metric Name","Metric Unit","Metric Value"
-"0","6679","cute_gemm","127.0.0.1","void vector_add_kernel<8>(__half *, int, const __half *, const __half *, __half, __half, __half)","1","7","(64, 1, 1)","(200, 1, 1)","0","8.9","Command line profiler metrics","gpu__time_duration.sum","ns","3,904"
