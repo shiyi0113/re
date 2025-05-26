@@ -1,3 +1,4 @@
+#pragma once
 #include <cublasLt.h>
 #include <cuda_fp16.h>
 #include <stdio.h>
@@ -129,7 +130,6 @@ void CublasLtGemm<T, ComputeType>::init(T *c, const T *a, const T *b, int m,
   cublasLtMatmulAlgoGetHeuristic(handle_, matmul_desc_, a_desc_, b_desc_,
                                  c_desc_, c_desc_, preference_, kAlgoMaxNum,
                                  algos_, &ret_algo_num_);
-
   a_ = a;
   b_ = b;
   c_ = c;

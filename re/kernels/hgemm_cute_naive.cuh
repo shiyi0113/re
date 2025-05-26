@@ -48,7 +48,7 @@ __global__ void hgemm_cute_naive_kernel(TC *Cptr, const TA *Aptr, const TB *Bptr
     cute::copy(tCrC, tCgC); // r->g
 }
 
-void hgemm_cute_naive_kernel(const int m = 81920,const int n = 256,const int k = 256)
+void hgemm_cute_naive(const int m = 81920, const int n = 256, const int k = 256)
 {
     using namespace cute;
     using TA = half;
