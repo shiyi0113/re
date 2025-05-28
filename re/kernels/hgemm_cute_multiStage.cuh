@@ -2,6 +2,9 @@
 
 #include <core/data.cuh>
 #include <core/cublaslt-gemm.cuh>
+
+#include <cublas_v2.h>
+
 using namespace cute;
 
 template <class Config>
@@ -81,6 +84,7 @@ __global__ void hgemm_cute_multiStage_kernel(void *d_C, const void *d_A, const v
     int ismem_write = 0;
     int ntile = k / kTileK;
 
+    CUTE_UNROLL
     for (int istage = 0; istage < kStage - 1; ++istage)
     {
         cute::copy(g2s_tiled_copy_a, tAgA_copy(_, _, _, istage), tAsA_copy(_, _, _, istage));
@@ -96,9 +100,12 @@ __global__ void hgemm_cute_multiStage_kernel(void *d_C, const void *d_A, const v
     int ik = 0;
     cute::copy(s2r_tiled_copy_a, tAsA(_, _, ik, ismem_read), tCrA_view(_, _, ik));
     cute::copy(s2r_tiled_copy_b, tBsB(_, _, ik, ismem_read), tCrB_view(_, _, ik));
+
+    CUTE_NO_UNROLL
     for (int itile = 0; itile < ntile; ++itile)
     {
         int nk = size<2>(tCrA);
+        CUTE_UNROLL
         for (int ik = 0; ik < nk; ++ik)
         {
             int ik_next = (ik + 1) % nk;
@@ -109,10 +116,8 @@ __global__ void hgemm_cute_multiStage_kernel(void *d_C, const void *d_A, const v
 
                 ismem_read = (ismem_read + 1) % kStage;
             }
-
             cute::copy(s2r_tiled_copy_a, tAsA(_, _, ik_next, ismem_read), tCrA_view(_, _, ik_next));
             cute::copy(s2r_tiled_copy_b, tBsB(_, _, ik_next, ismem_read), tCrB_view(_, _, ik_next));
-
             if (ik == 0)
             {
                 if (itile_to_read < ntile)
@@ -123,10 +128,8 @@ __global__ void hgemm_cute_multiStage_kernel(void *d_C, const void *d_A, const v
                     ++itile_to_read;
                     ismem_write = (ismem_write + 1) % kStage;
                 }
-
                 cp_async_fence();
             }
-
             cute::gemm(tiled_mma, tCrC, tCrA(_, _, ik), tCrB(_, _, ik), tCrC);
         }
     }
@@ -147,8 +150,10 @@ __global__ void hgemm_cute_multiStage_kernel(void *d_C, const void *d_A, const v
 
     int step = size<3>(tCsC_r2s);
 
+    CUTE_UNROLL
     for (int i = 0; i < size<1>(tCrC_r2sx); i += step)
     {
+        CUTE_UNROLL
         for (int j = 0; j < step; ++j)
         {
             auto t = make_tensor_like<T>(tCrC_r2sx(_, i + j));
@@ -157,6 +162,7 @@ __global__ void hgemm_cute_multiStage_kernel(void *d_C, const void *d_A, const v
         }
         __syncthreads();
 
+        CUTE_UNROLL
         for (int j = 0; j < step; ++j)
         {
             cute::copy(s2g_tiled_copy_c, tCsC_s2g(_, 0, 0, j), tCgC_s2gx(_, i + j));
@@ -296,17 +302,57 @@ void hgemm_cute_multiStage()
     {
         printf_fail("err = %d, str = %s\n", err, cudaGetErrorString(err));
     }
+    // cublas
+    cublasHandle_t handle;
+    cublasCreate(&handle);
+    int cublas_version;
+    cublasGetVersion_v2(handle, &cublas_version);
+    printf("cuBLAS version: %d\n", cublas_version);
+    T *h_C_blas = (T *)malloc(sizeof(T) * M * N);
+    T *d_C_cublas;
+    cudaMalloc(&d_C_cublas, sizeof(T) * M * N);
+    half alpha = 1.f;
+    half beta = 0.f;
+    cudaMemset(d_C_cublas, 0, sizeof(T) * M * N);
+    cublasStatus_t ret = cublasHgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, N, M, K,
+                                     &alpha, (half *)d_B, K, (half *)d_A, K,
+                                     &beta, (half *)d_C_cublas, N);
+    if (ret != CUBLAS_STATUS_SUCCESS)
+    {
+        printf("cublas err = %d, str = %s\n", ret, cublasGetStatusString(ret));
+    }
+    cudaMemcpy(h_C_blas, d_C_cublas, sizeof(T) * M * N, cudaMemcpyDeviceToHost);
+
+    // cublaslt
+    T *h_C_cublaslt = (T *)malloc(sizeof(T) * M * N);
+    T *d_C_cublaslt;
+    cudaMalloc(&d_C_cublaslt, sizeof(T) * M * N);
+    CublasLtGemm<T, T> cublaslt_gemm;
+    cublaslt_gemm.init(d_C_cublaslt, d_B, d_A, N, M, K);
+    cublaslt_gemm.run();
+    cudaMemcpy(h_C_cublaslt, d_C_cublaslt, sizeof(T) * M * N, cudaMemcpyDeviceToHost);
 
     // compare
+    gpu_compare(d_C, d_C_cublas, M * N);
+    gpu_compare(d_C, d_C_cublaslt, M * N);
     cpu_compare(tC_cpu, tC, 0.1f);
 
     // print
     auto tile = make_tile(min(8, M), min(8, N));
     auto t32x32 = local_tile(tC, tile, make_coord(0, 0));
     auto t32x32_cpu = local_tile(tC_cpu, tile, make_coord(0, 0));
+    auto tC_host_blas = make_tensor(h_C_blas, make_shape(M, N), make_stride(N, 1));
+    auto tC_host_cublaslt = make_tensor(h_C_cublaslt, make_shape(M, N), make_stride(N, 1));
+    auto t32x32_blas = local_tile(tC_host_blas, tile, make_coord(0, 0));
+    auto t32x32_cublaslt = local_tile(tC_host_cublaslt, tile, make_coord(0, 0));
+
     printf("M = %d, N = %d, K = %d\n", M, N, K);
     printf("my kernel:\n");
     print_tensor(t32x32);
     printf("cpu:\n");
     print_tensor(t32x32_cpu);
+    printf("cublas:\n");
+    print_tensor(t32x32_blas);
+    printf("cublaslt:\n");
+    print_tensor(t32x32_cublaslt);
 }

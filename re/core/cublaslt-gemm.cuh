@@ -4,9 +4,11 @@
 #include <stdio.h>
 
 #define check(call)                                        \
-  do {                                                     \
+  do                                                       \
+  {                                                        \
     auto err = call;                                       \
-    if (err != CUBLAS_STATUS_SUCCESS) {                    \
+    if (err != CUBLAS_STATUS_SUCCESS)                      \
+    {                                                      \
       printf("err = %d, str = %s, line = %d, %s\n", err,   \
              cublasGetStatusString(err), __LINE__, #call); \
       exit(0);                                             \
@@ -14,19 +16,22 @@
   } while (0)
 
 template <typename T>
-struct ComputeTypeTraits {
+struct ComputeTypeTraits
+{
   static constexpr cublasComputeType_t kComputeType = CUBLAS_COMPUTE_16F;
   static constexpr cudaDataType_t kScaleType = CUDA_R_16F;
 };
 
 template <>
-struct ComputeTypeTraits<float> {
+struct ComputeTypeTraits<float>
+{
   static constexpr cublasComputeType_t kComputeType = CUBLAS_COMPUTE_32F;
   static constexpr cudaDataType_t kScaleType = CUDA_R_32F;
 };
 
 template <typename T, typename ComputeType = T>
-struct CublasLtGemm {
+struct CublasLtGemm
+{
   cublasLtHandle_t handle_;
 
   cublasLtMatrixLayout_t a_desc_;
@@ -60,8 +65,10 @@ struct CublasLtGemm {
 };
 
 template <typename T, typename ComputeType>
-bool CublasLtGemm<T, ComputeType>::run() {
-  for (int i = 0; i < ret_algo_num_; ++i) {
+bool CublasLtGemm<T, ComputeType>::run()
+{
+  for (int i = 0; i < ret_algo_num_; ++i)
+  {
     auto algo = algos_[i];
 
     /*
@@ -78,7 +85,8 @@ bool CublasLtGemm<T, ComputeType>::run() {
 
 template <typename T, typename ComputeType>
 void CublasLtGemm<T, ComputeType>::init(T *c, const T *a, const T *b, int m,
-                                        int n, int k) {
+                                        int n, int k)
+{
   auto version = cublasLtGetVersion();
   printf("cublasLt version: %zu\n", version);
 

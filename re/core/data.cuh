@@ -22,7 +22,8 @@ void gpu_compare(const T *x, const T *y, int n, float threshold = 1.E-1);
 template <typename LayoutType>
 bool save_latex_to_file(const LayoutType &layout, const std::string &filename);
 
-void printf_fail(const char *fmt, ...) {
+void printf_fail(const char *fmt, ...)
+{
   int red = 31;
   int def = 39;
 
@@ -36,7 +37,8 @@ void printf_fail(const char *fmt, ...) {
   printf("\033[%dm", def);
 }
 
-void printf_ok(const char *fmt, ...) {
+void printf_ok(const char *fmt, ...)
+{
   int red = 32;
   int def = 39;
 
@@ -51,13 +53,15 @@ void printf_ok(const char *fmt, ...) {
 }
 
 template <typename T>
-void cpu_rand_data(T *c) {
+void cpu_rand_data(T *c)
+{
   auto t = *c;
 
   using ValueType = typename T::value_type;
 
   int n = size(t);
-  for (int i = 0; i < n; ++i) {
+  for (int i = 0; i < n; ++i)
+  {
     float v = ((rand() % 200) - 100.f) * 0.01f;
     // printf("v = %f\n", v);
     t(i) = ValueType(v);
@@ -65,17 +69,20 @@ void cpu_rand_data(T *c) {
 }
 
 template <typename T>
-void cpu_const_data(T *c, float k) {
+void cpu_const_data(T *c, float k)
+{
   auto t = *c;
 
   int n = size(t);
-  for (int i = 0; i < n; ++i) {
+  for (int i = 0; i < n; ++i)
+  {
     t(i) = k;
   }
 }
 
 template <typename T>
-void cpu_gemm(T *c, const T &a, const T &b) {
+void cpu_gemm(T *c, const T &a, const T &b)
+{
   using namespace cute;
 
   using ValueType = typename T::value_type;
@@ -84,11 +91,14 @@ void cpu_gemm(T *c, const T &a, const T &b) {
   int n = size<0>(b);
   int k = size<1>(a);
 
-  for (int i = 0; i < m; ++i) {
-    for (int j = 0; j < n; ++j) {
+  for (int i = 0; i < m; ++i)
+  {
+    for (int j = 0; j < n; ++j)
+    {
       float s = 0.f;
 
-      for (int kk = 0; kk < k; ++kk) {
+      for (int kk = 0; kk < k; ++kk)
+      {
         float v1 = a(i, kk);
         float v2 = b(j, kk);
         s += v1 * v2;
@@ -100,10 +110,12 @@ void cpu_gemm(T *c, const T &a, const T &b) {
 }
 
 template <typename T>
-void cpu_compare(const T &x, const T &y, float threshold) {
+void cpu_compare(const T &x, const T &y, float threshold)
+{
   using namespace cute;
 
-  if (size(x) != size(y)) {
+  if (size(x) != size(y))
+  {
     fprintf(stderr, "lenght not equal x = %d, y = %d\n", size(x), size(y));
     exit(9);
   }
@@ -111,20 +123,25 @@ void cpu_compare(const T &x, const T &y, float threshold) {
   int n = size(x);
   float diff_max = 0;
   int diff_count = 0;
-  for (int i = 0; i < n; ++i) {
+  for (int i = 0; i < n; ++i)
+  {
     float v0 = x(i);
     float v1 = y(i);
 
     diff_max = max(diff_max, fabs(v0 - v1));
 
-    if (fabs(v0 - v1) > threshold) {
+    if (fabs(v0 - v1) > threshold)
+    {
       ++diff_count;
     }
   }
-  if (diff_count > 0) {
+  if (diff_count > 0)
+  {
     printf("check fail: max_diff = %f, diff_count = %d\n", diff_max,
            diff_count);
-  } else {
+  }
+  else
+  {
     printf("cpu check ok\n");
   }
 }
@@ -132,10 +149,12 @@ void cpu_compare(const T &x, const T &y, float threshold) {
 template <typename T>
 __global__ void gpu_compare_kernel(const T *x, const T *y, int n,
                                    float threshold, int *count,
-                                   float *max_error) {
+                                   float *max_error)
+{
   int idx = threadIdx.x + blockIdx.x * blockDim.x;
 
-  if (idx >= n) {
+  if (idx >= n)
+  {
     return;
   }
 
@@ -143,7 +162,8 @@ __global__ void gpu_compare_kernel(const T *x, const T *y, int n,
   float v1 = y[idx];
 
   float diff = fabs(v0 - v1);
-  if (diff > threshold) {
+  if (diff > threshold)
+  {
     atomicAdd(count, 1);
 
     // for positive floating point, there int representation is in the same
@@ -154,7 +174,8 @@ __global__ void gpu_compare_kernel(const T *x, const T *y, int n,
 }
 
 template <typename T>
-void gpu_compare(const T *x, const T *y, int n, float threshold) {
+void gpu_compare(const T *x, const T *y, int n, float threshold)
+{
   int *num_count;
   float *max_error;
   cudaMalloc(&num_count, sizeof(int));
@@ -171,9 +192,12 @@ void gpu_compare(const T *x, const T *y, int n, float threshold) {
   cudaMemcpy(&error, max_error, sizeof(int), cudaMemcpyDeviceToHost);
   cudaDeviceSynchronize();
 
-  if (num == 0) {
+  if (num == 0)
+  {
     printf_ok("check ok, max_error = %f\n", error);
-  } else {
+  }
+  else
+  {
     float p = (100.f * num) / n;
     printf_fail("===============================\n");
     printf_fail("check fail: diff %.1f%% = %d/%d max_error = %f\n", p, num, n,
@@ -183,9 +207,11 @@ void gpu_compare(const T *x, const T *y, int n, float threshold) {
 }
 
 static bool split_key_and_val(std::string *key, std::string *val,
-                              const std::string &kv_and_eq) {
+                              const std::string &kv_and_eq)
+{
   auto it = kv_and_eq.find('=');
-  if (it == std::string::npos) {
+  if (it == std::string::npos)
+  {
     return false;
   }
 
@@ -194,24 +220,29 @@ static bool split_key_and_val(std::string *key, std::string *val,
   return true;
 }
 
-void Parse(int *val_out, const char *key_s, int argc, char *argv[]) {
+void Parse(int *val_out, const char *key_s, int argc, char *argv[])
+{
   const std::string target(key_s);
   bool ok = false;
-  for (int i = 0; i < argc; ++i) {
+  for (int i = 0; i < argc; ++i)
+  {
     std::string s(argv[i]);
 
     std::string key, val;
-    if (!split_key_and_val(&key, &val, s)) {
+    if (!split_key_and_val(&key, &val, s))
+    {
       continue;
     }
 
-    if (key == target) {
+    if (key == target)
+    {
       *val_out = std::stoi(val);
       ok = true;
     }
   }
 
-  if (!ok) {
+  if (!ok)
+  {
     printf("%s not found in program argv, set it to default %d\n",
            target.c_str(), *val_out);
   }
@@ -220,33 +251,33 @@ void Parse(int *val_out, const char *key_s, int argc, char *argv[]) {
 template <typename LayoutType>
 bool save_latex_to_file(const LayoutType &layout, const std::string &filename)
 {
-	// 创建要捕获输出的文件
-	FILE *file = fopen(filename.c_str(), "w");
-	if (!file)
-	{
-		std::cerr << "无法打开文件: " << filename << std::endl;
-		return false;
-	}
+  // 创建要捕获输出的文件
+  FILE *file = fopen(filename.c_str(), "w");
+  if (!file)
+  {
+    std::cerr << "无法打开文件: " << filename << std::endl;
+    return false;
+  }
 
-	// 保存原始的stdout
-	int original_stdout = dup(fileno(stdout));
+  // 保存原始的stdout
+  int original_stdout = dup(fileno(stdout));
 
-	// 重定向stdout到文件
-	dup2(fileno(file), fileno(stdout));
+  // 重定向stdout到文件
+  dup2(fileno(file), fileno(stdout));
 
-	// 调用print_latex，现在应该输出到文件
-	print_latex(layout);
+  // 调用print_latex，现在应该输出到文件
+  print_latex(layout);
 
-	// 冲洗缓冲区
-	fflush(stdout);
+  // 冲洗缓冲区
+  fflush(stdout);
 
-	// 恢复原始stdout
-	dup2(original_stdout, fileno(stdout));
-	close(original_stdout);
+  // 恢复原始stdout
+  dup2(original_stdout, fileno(stdout));
+  close(original_stdout);
 
-	// 关闭文件
-	fclose(file);
+  // 关闭文件
+  fclose(file);
 
-	std::cout << "已尝试保存LaTeX到文件: " << filename << std::endl;
-	return true;
+  std::cout << "已尝试保存LaTeX到文件: " << filename << std::endl;
+  return true;
 }
