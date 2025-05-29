@@ -4,6 +4,7 @@
 #include <core/cublaslt-gemm.cuh>
 
 #include <cublas_v2.h>
+#include <cutlass/util/GPU_Clock.hpp>
 
 using namespace cute;
 
@@ -244,7 +245,7 @@ struct GemmConfig
 void hgemm_cute_multiStage()
 {
     using T = cute::half_t;
-    srand(521);
+    srand(520);
     constexpr int M = 81920;
     constexpr int N = 256;
     constexpr int K = 256;
@@ -252,30 +253,24 @@ void hgemm_cute_multiStage()
     constexpr int kTileM = 128;
     constexpr int kTileK = 32;
     constexpr int kStage = 3;
+    thrust::host_vector<T> h_A(M * K);
+    thrust::host_vector<T> h_B(N * K);
+    thrust::host_vector<T> h_C(M * N);
 
-    T *h_A = (T *)malloc(sizeof(T) * M * K);
-    T *h_B = (T *)malloc(sizeof(T) * N * K);
-    T *h_C = (T *)malloc(sizeof(T) * M * N);
-    auto tA = make_tensor(h_A, make_shape(M, K), make_stride(K, 1));
-    auto tB = make_tensor(h_B, make_shape(N, K), make_stride(K, 1));
-    auto tC = make_tensor(h_C, make_shape(M, N), make_stride(N, 1));
+    auto tA = make_tensor(h_A.data(), make_shape(M, K), make_stride(K, 1));
+    auto tB = make_tensor(h_B.data(), make_shape(N, K), make_stride(K, 1));
+    auto tC = make_tensor(h_C.data(), make_shape(M, N), make_stride(N, 1));
     cpu_rand_data(&tA);
     cpu_rand_data(&tB);
     clear(tC);
+    thrust::device_vector<T> d_A = h_A;
+    thrust::device_vector<T> d_B = h_B;
+    thrust::device_vector<T> d_C = h_C;
 
-    T *d_A;
-    T *d_B;
-    T *d_C;
-    cudaMalloc(&d_A, sizeof(T) * M * K);
-    cudaMalloc(&d_B, sizeof(T) * N * K);
-    cudaMalloc(&d_C, sizeof(T) * M * N);
-    cudaMemcpy(d_A, h_A, sizeof(T) * M * K, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_B, h_B, sizeof(T) * N * K, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_C, h_C, sizeof(T) * M * N, cudaMemcpyHostToDevice);
-    // CPU-Calculate
-    T *h_C_CPU = (T *)malloc(sizeof(T) * M * N);
-    auto tC_cpu = make_tensor(h_C_CPU, make_shape(M, N), make_stride(N, 1));
-    cpu_gemm(&tC_cpu, tA, tB);
+    // Timing iterations
+    double gflops = (2.0 * M * N * K) * 1e-9;
+    const int timing_iterations = 100;
+    GPU_Clock timer;
 
     // kernel
     GemmConfig<T, kTileM, kTileN, kTileK, kStage> gemm_config;
@@ -284,75 +279,85 @@ void hgemm_cute_multiStage()
     dim3 grid((N + gemm_config.kTileN - 1) / gemm_config.kTileN,
               (M + gemm_config.kTileM - 1) / gemm_config.kTileM);
     int shm_size = gemm_config.kShmSize;
-
     cudaFuncSetAttribute(hgemm_cute_multiStage_kernel<decltype(gemm_config)>, cudaFuncAttributeMaxDynamicSharedMemorySize, shm_size);
-    hgemm_cute_multiStage_kernel<decltype(gemm_config)><<<grid, block, shm_size>>>(d_C, d_A, d_B, M, N, K);
-    cudaMemcpy(h_C, d_C, sizeof(T) * M * N, cudaMemcpyDeviceToHost);
 
-    // error throw
-    cudaDeviceSynchronize();
-    auto err = cudaGetLastError();
-    printf("block = (%d, %d), gird = (%d, %d), shm = %d\n", block.x, block.y, grid.x, grid.y, shm_size);
+    timer.start();
+    for (int i = 0; i < timing_iterations; ++i)
+    {
+        hgemm_cute_multiStage_kernel<decltype(gemm_config)><<<grid, block, shm_size>>>(d_C.data().get(), d_A.data().get(), d_B.data().get(), M, N, K);
+    }
+    double my_kernel_time = timer.seconds() / timing_iterations;
+    printf("my kernel:     [%6.1f]GFlop/s  (%6.4f)ms\n", gflops / my_kernel_time, my_kernel_time * 1000);
+    CUTE_CHECK_LAST();
+    h_C = d_C;
 
-    if (err == cudaSuccess)
-    {
-        printf("err = %d, str = %s\n", err, cudaGetErrorString(err));
-    }
-    else
-    {
-        printf_fail("err = %d, str = %s\n", err, cudaGetErrorString(err));
-    }
+    // CPU-Calculate
+    thrust::host_vector<T> h_C_CPU(M * N);
+    auto tC_cpu = make_tensor(h_C_CPU.data(), make_shape(M, N), make_stride(N, 1));
+    timer.start();
+    cpu_gemm(&tC_cpu, tA, tB);
+    double cpu_time = timer.seconds() / timing_iterations;
+    printf("cpu gemm:     [%6.1f]GFlop/s  (%6.4f)ms\n", gflops / cpu_time, cpu_time * 1000);
+
     // cublas
     cublasHandle_t handle;
     cublasCreate(&handle);
     int cublas_version;
     cublasGetVersion_v2(handle, &cublas_version);
     printf("cuBLAS version: %d\n", cublas_version);
-    T *h_C_blas = (T *)malloc(sizeof(T) * M * N);
-    T *d_C_cublas;
-    cudaMalloc(&d_C_cublas, sizeof(T) * M * N);
+    thrust::host_vector<T> h_C_blas(M * N);
+    thrust::device_vector<T> d_C_cublas = h_C_blas;
     half alpha = 1.f;
     half beta = 0.f;
-    cudaMemset(d_C_cublas, 0, sizeof(T) * M * N);
-    cublasStatus_t ret = cublasHgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, N, M, K,
-                                     &alpha, (half *)d_B, K, (half *)d_A, K,
-                                     &beta, (half *)d_C_cublas, N);
-    if (ret != CUBLAS_STATUS_SUCCESS)
+    timer.start();
+    for (int i = 0; i < timing_iterations; ++i)
     {
-        printf("cublas err = %d, str = %s\n", ret, cublasGetStatusString(ret));
+        cublasHgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, N, M, K,
+                    &alpha, (half *)d_B.data().get(), K, (half *)d_A.data().get(), K,
+                    &beta, (half *)d_C_cublas.data().get(), N);
     }
-    cudaMemcpy(h_C_blas, d_C_cublas, sizeof(T) * M * N, cudaMemcpyDeviceToHost);
+    double cublas_time = timer.seconds() / timing_iterations;
+    printf("cublas:     [%6.1f]GFlop/s  (%6.4f)ms\n", gflops / cublas_time, cublas_time * 1000);
+    CUTE_CHECK_LAST();
+    h_C_blas = d_C_cublas;
 
     // cublaslt
-    T *h_C_cublaslt = (T *)malloc(sizeof(T) * M * N);
-    T *d_C_cublaslt;
-    cudaMalloc(&d_C_cublaslt, sizeof(T) * M * N);
+    thrust::host_vector<T> h_C_cublaslt(M * N);
+    thrust::device_vector<T> d_C_cublaslt = h_C_blas;
+
     CublasLtGemm<T, T> cublaslt_gemm;
-    cublaslt_gemm.init(d_C_cublaslt, d_B, d_A, N, M, K);
-    cublaslt_gemm.run();
-    cudaMemcpy(h_C_cublaslt, d_C_cublaslt, sizeof(T) * M * N, cudaMemcpyDeviceToHost);
+    cublaslt_gemm.init(d_C_cublaslt.data().get(), d_B.data().get(), d_A.data().get(), N, M, K);
+    timer.start();
+    for (int i = 0; i < timing_iterations; ++i)
+    {
+        cublaslt_gemm.run();
+    }
+    double cublaslt_time = timer.seconds() / timing_iterations;
+    printf("cublaslt:     [%6.1f]GFlop/s  (%6.4f)ms\n", gflops / cublaslt_time, cublaslt_time * 1000);
+    CUTE_CHECK_LAST();
+    h_C_cublaslt = d_C_cublaslt;
 
     // compare
-    gpu_compare(d_C, d_C_cublas, M * N);
-    gpu_compare(d_C, d_C_cublaslt, M * N);
+    gpu_compare(d_C.data().get(), d_C_cublas.data().get(), M * N);
+    gpu_compare(d_C.data().get(), d_C_cublaslt.data().get(), M * N, 0.1f);
     cpu_compare(tC_cpu, tC, 0.1f);
 
-    // print
-    auto tile = make_tile(min(8, M), min(8, N));
-    auto t32x32 = local_tile(tC, tile, make_coord(0, 0));
-    auto t32x32_cpu = local_tile(tC_cpu, tile, make_coord(0, 0));
-    auto tC_host_blas = make_tensor(h_C_blas, make_shape(M, N), make_stride(N, 1));
-    auto tC_host_cublaslt = make_tensor(h_C_cublaslt, make_shape(M, N), make_stride(N, 1));
-    auto t32x32_blas = local_tile(tC_host_blas, tile, make_coord(0, 0));
-    auto t32x32_cublaslt = local_tile(tC_host_cublaslt, tile, make_coord(0, 0));
+    // // print
+    // auto tile = make_tile(min(8, M), min(8, N));
+    // auto t32x32 = local_tile(tC, tile, make_coord(0, 0));
+    // auto t32x32_cpu = local_tile(tC_cpu, tile, make_coord(0, 0));
+    // auto tC_host_blas = make_tensor(h_C_blas.data(), make_shape(M, N), make_stride(N, 1));
+    // auto tC_host_cublaslt = make_tensor(h_C_cublaslt.data(), make_shape(M, N), make_stride(N, 1));
+    // auto t32x32_blas = local_tile(tC_host_blas, tile, make_coord(0, 0));
+    // auto t32x32_cublaslt = local_tile(tC_host_cublaslt, tile, make_coord(0, 0));
 
-    printf("M = %d, N = %d, K = %d\n", M, N, K);
-    printf("my kernel:\n");
-    print_tensor(t32x32);
-    printf("cpu:\n");
-    print_tensor(t32x32_cpu);
-    printf("cublas:\n");
-    print_tensor(t32x32_blas);
-    printf("cublaslt:\n");
-    print_tensor(t32x32_cublaslt);
+    // printf("M = %d, N = %d, K = %d\n", M, N, K);
+    // printf("my kernel:\n");
+    // print_tensor(t32x32);
+    // printf("cpu:\n");
+    // print_tensor(t32x32_cpu);
+    // printf("cublas:\n");
+    // print_tensor(t32x32_blas);
+    // printf("cublaslt:\n");
+    // print_tensor(t32x32_cublaslt);
 }
