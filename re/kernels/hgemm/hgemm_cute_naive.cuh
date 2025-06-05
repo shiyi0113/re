@@ -1,10 +1,8 @@
+#pragma once
 #include <cute/tensor.hpp>
 
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
-
-#include <cublas_v2.h>
-#include <core/data.cuh>
 
 template <typename TA, typename TB, typename TC, int kTileM, int kTileN, int kTileK, typename TiledMMA>
 __global__ void hgemm_cute_naive_kernel(TC *Cptr, const TA *Aptr, const TB *Bptr, int m, int n, int k)
@@ -47,27 +45,16 @@ __global__ void hgemm_cute_naive_kernel(TC *Cptr, const TA *Aptr, const TB *Bptr
 
     cute::copy(tCrC, tCgC); // r->g
 }
-
-void hgemm_cute_naive(const int m = 81920, const int n = 256, const int k = 256)
+template <class T>
+void hgemm_cute_naive(thrust::host_vector<T> h_A, thrust::host_vector<T> h_B, thrust::host_vector<T> h_C, const int m = 81920, const int n = 256, const int k = 256)
 {
     using namespace cute;
-    using TA = half;
-    using TB = half;
-    using TC = half;
+    using TA = T;
+    using TB = T;
+    using TC = T;
     const int kTileN = 128;
     const int kTileM = 128;
     const int kTileK = 64;
-
-    thrust::host_vector<TA> h_A(m * k);
-    thrust::host_vector<TB> h_B(k * n);
-    thrust::host_vector<TC> h_C(m * n);
-
-    for (int j = 0; j < m * k; ++j)
-        h_A[j] = static_cast<TA>(2 * (rand() / double(RAND_MAX)) - 1);
-    for (int j = 0; j < k * n; ++j)
-        h_B[j] = static_cast<TB>(2 * (rand() / double(RAND_MAX)) - 1);
-    for (int j = 0; j < m * n; ++j)
-        h_C[j] = static_cast<TC>(-1);
 
     thrust::device_vector<TA> d_A = h_A;
     thrust::device_vector<TB> d_B = h_B;
@@ -80,51 +67,13 @@ void hgemm_cute_naive(const int m = 81920, const int n = 256, const int k = 256)
     using MMA = decltype(make_tiled_mma(mma_atom{},
                                         make_layout(Shape<_2, _2, _1>{}),
                                         Tile<_32, _16, _16>{}));
-
-    save_latex_to_file(MMA{}, "MMA");
     dim3 block(size(MMA{}));
     dim3 grid(n / kTileN, m / kTileM);
     hgemm_cute_naive_kernel<TA, TB, TC, kTileM, kTileN, kTileK, MMA><<<grid, block>>>(
-        thrust::raw_pointer_cast(d_C.data()),
-        thrust::raw_pointer_cast(d_A.data()),
-        thrust::raw_pointer_cast(d_B.data()),
+        d_C.data().get(),
+        d_A.data().get(),
+        d_B.data().get(),
         m, n, k);
     CUTE_CHECK_LAST();
-    thrust::host_vector<TC> result_cute = d_C;
-
-    // cublas
-    thrust::device_vector<TC> d_Z = h_C;
-
-    cublasHandle_t handle;
-    cublasCreate(&handle);
-
-    half alpha = half(1.f);
-    half beta = half(0.f);
-    cublasStatus_t ret = cublasHgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N,
-                                     n, m, k,
-                                     &alpha,
-                                     thrust::raw_pointer_cast(d_B.data()), k,
-                                     thrust::raw_pointer_cast(d_A.data()), k,
-                                     &beta,
-                                     thrust::raw_pointer_cast(d_Z.data()), n);
-    if (ret != CUBLAS_STATUS_SUCCESS)
-    {
-        printf("blas err = %d, str = %s\n", ret, cublasGetStatusString(ret));
-    }
-    CUTE_CHECK_LAST();
-    thrust::host_vector<TC> result_cublas = d_Z;
-    // compare
-    float threshold = 0.1;
-    for (int i = 0; i < m * n; ++i)
-    {
-        float v1 = result_cute[i];
-        float v2 = result_cublas[i];
-        if (fabs(v2 - v1) > threshold)
-        {
-            printf("error %d: v1 = %f, v2 = %f\n", i, v1, v2);
-            exit(-1);
-            break;
-        }
-    }
-    print("right!\n");
+    h_C = d_C;
 }

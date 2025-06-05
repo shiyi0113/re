@@ -114,19 +114,19 @@ void cpu_compare(const T &x, const T &y, float threshold)
 {
   using namespace cute;
 
-  if (size(x) != size(y))
+  if (x.size() != y.size())
   {
-    fprintf(stderr, "lenght not equal x = %d, y = %d\n", size(x), size(y));
+    fprintf(stderr, "lenght not equal x = %d, y = %d\n", x.size(), y.size());
     exit(9);
   }
 
-  int n = size(x);
+  int n = x.size();
   float diff_max = 0;
   int diff_count = 0;
   for (int i = 0; i < n; ++i)
   {
-    float v0 = x(i);
-    float v1 = y(i);
+    float v0 = x[i];
+    float v1 = y[i];
 
     diff_max = max(diff_max, fabs(v0 - v1));
 
